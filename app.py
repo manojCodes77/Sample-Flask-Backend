@@ -1,6 +1,7 @@
 # from flask import Flask, jsonify, request
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.exc import OperationalError
@@ -14,7 +15,13 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+# Respect reverse proxy headers (X-Forwarded-*) in production
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+
+# Configure CORS via env, default to '*'
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
+cors_resources = {r"/api/*": {"origins": ALLOWED_ORIGINS if ALLOWED_ORIGINS == "*" else [o.strip() for o in ALLOWED_ORIGINS.split(",")]}}
+CORS(app, resources=cors_resources)
 
 # Database setup
 raw_url = os.getenv("DATABASE_URL")
@@ -52,6 +59,10 @@ def init_db():
         raise RuntimeError(
             f"Failed to connect to database. Ensure PostgreSQL is running and DATABASE_URL is correct. Original error: {e}"
         )
+
+
+# Initialize DB at import time (works under WSGI servers and local runs)
+init_db()
 
 
 @app.route("/", methods=["GET"])
@@ -143,5 +154,6 @@ def delete_note(note_id: int):
 
 
 if __name__ == "__main__":
-    init_db()
-    app.run(debug=True)
+    port = int(os.getenv("PORT", "10000"))
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    app.run(host="0.0.0.0", port=port, debug=debug)
